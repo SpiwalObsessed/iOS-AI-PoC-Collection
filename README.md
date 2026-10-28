@@ -1,5 +1,9 @@
 # 27.0.1 (24A446) .vs 27.2 (24B119)
 
+Credit to https://github.com/blacktop/ipsw for making this possible!
+EXPECT SLOP. THIS IS ENTIRELY BY AI! However, some of them may work. CONFIRMED_REPORTS is NOT human verified. it went through 2 passes of verification instead of 1. this includes UNCOMPLETED PoCs which MAY NOT EVEN FUNCTION!
+You have been warned.
+
 ## Inputs
 
 - `iPhone14,5_27.0.1_24A446_Restore.ipsw`
